@@ -2,3 +2,4 @@
 .envrc
 .direnv
 measurements_data.txt
+perf.data*

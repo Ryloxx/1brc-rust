@@ -4,4 +4,8 @@ version = "0.1.0"
 edition = "2021"
 default-run = "onebrc-challenge"
 [dependencies]
+libc = "0.2.152"
 rand = "0.8.5"
+[profile.release-with-debug]
+inherits = "release"
+debug = true

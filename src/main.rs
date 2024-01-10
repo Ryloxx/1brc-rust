@@ -20,17 +20,27 @@
 //  constraints above and any data distribution (number of measurements per
 //  station) must be supported
 
-use std::{env::args, path::Path};
+use std::{env::args, num::NonZeroU8, path::Path};
 
 use onebrc_challenge::challenge;
 
 fn main() -> Result<(), String> {
-    let output = challenge::run(Path::new(
-        args()
-            .nth(1)
-            .ok_or_else(|| "Missing file path argument".to_string())?
-            .as_str(),
-    ))?;
+    let output = challenge::run(
+        Path::new(
+            args()
+                .nth(1)
+                .ok_or_else(|| "Missing file path argument".to_string())?
+                .as_str(),
+        ),
+        NonZeroU8::new(
+            args()
+                .nth(2)
+                .unwrap_or("1".to_string())
+                .parse::<u8>()
+                .map_err(|err| err.to_string())?,
+        )
+        .ok_or_else(|| "Wrong num cpus number".to_string())?,
+    )?;
     println!("{output}");
     Ok(())
 }
