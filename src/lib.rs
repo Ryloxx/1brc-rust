@@ -84,9 +84,10 @@ pub mod challenge {
                 )
             };
             if mapped_mem_base == libc::MAP_FAILED {
-                return Err(format!("Memory mapping failed with error {}", unsafe {
-                    *libc::__errno_location()
-                }));
+                return Err(format!(
+                    "Memory mapping failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             };
             Ok(Self {
                 mem_base: mapped_mem_base,
@@ -97,9 +98,10 @@ pub mod challenge {
     impl Drop for MemMapped {
         fn drop(&mut self) {
             if unsafe { libc::munmap(self.mem_base, self.length as usize) } == -1 {
-                eprintln!("Memory unmapping failed with error {}", unsafe {
-                    *libc::__errno_location()
-                })
+                eprintln!(
+                    "Memory unmapping failed: {}",
+                    std::io::Error::last_os_error()
+                )
             };
         }
     }
@@ -125,64 +127,73 @@ pub mod challenge {
                     let mut lookup: Lookup = HashMap::default();
                     let mut measurement = (String::with_capacity(100), 0);
                     while (offset - from) < chunk_size && offset < data.length {
-                        process_line(&mut measurement, base, &mut offset);
-                        handle_entry(measurement.1, &mut lookup, &measurement.0);
+                        // No data validity check made for speed purpose, so this is not safe indeed
+                        unsafe { process_entry(&mut measurement, base, &mut offset) };
+                        handle_entry(&mut lookup, &measurement.0, measurement.1);
+                        // Go to next line
+                        offset += 1;
                     }
                     lookup
                 })
             })
             .collect::<Vec<JoinHandle<Lookup>>>()
             .into_iter()
-            .flat_map(|handle| handle.join())
-            .reduce(|mut acc, curr| {
-                for (key, value) in curr.into_iter() {
-                    if let Some(entry) = acc.get_mut(&key) {
-                        entry.0 += value.0;
-                        entry.1 = entry.1.min(value.1);
-                        entry.2 = entry.2.max(value.2);
-                        entry.3 += value.3;
-                    } else {
-                        acc.insert(key, value);
-                    }
-                }
-                acc
-            })
+            .flat_map(JoinHandle::join)
+            .reduce(merge_lookups)
             .unwrap_or_default();
-        let out = generate_output(lookup);
-        Ok(out)
+        Ok(generate_output(lookup))
     }
 
-    fn process_line(out: &mut (String, i32), data: *const u8, offset: &mut u64) {
+    fn merge_lookups(mut a: Lookup, b: Lookup) -> Lookup {
+        for (key, value) in b.into_iter() {
+            if let Some(entry) = a.get_mut(&key) {
+                entry.0 += value.0;
+                entry.1 = entry.1.min(value.1);
+                entry.2 = entry.2.max(value.2);
+                entry.3 += value.3;
+            } else {
+                a.insert(key, value);
+            }
+        }
+        a
+    }
+
+    /// Expect data to contain valid utf-8 \
+    /// Expect offset to be in data bounds and pointing at the start of a
+    /// codepoint. \
+    /// Expect entry to be formatted as
+    /// <string: stationname>;<double:measurement> \
+    /// The resulting offset will point after the entry
+    unsafe fn process_entry(out: &mut (String, i32), data: *const u8, offset: &mut u64) {
         out.0.clear();
         out.1 = 0;
         {
             let start = *offset;
             loop {
-                if unsafe { *data.add(*offset as usize) } == b';' {
+                if *data.add(*offset as usize) == b';' {
                     break;
                 }
                 *offset += 1;
             }
             let len = (*offset - start) as usize;
-            unsafe {
-                let v = out.0.as_mut_vec();
-                v.resize(len, 0);
-                v.as_mut_slice()
-                    .copy_from_slice(slice::from_raw_parts(data.add(start as usize), len))
-            };
+            let v = out.0.as_mut_vec();
+            v.resize(len, 0);
+            v.as_mut_slice()
+                .copy_from_slice(slice::from_raw_parts(data.add(start as usize), len))
         }
-        let sign = unsafe { *data.add(*offset as usize + 1) } == b'-';
+        let sign = *data.add(*offset as usize + 1) == b'-';
         if sign {
             *offset += 1;
         }
         for _ in 0..3 {
             *offset += 1;
-            match unsafe { *data.add(*offset as usize) } {
+            match *data.add(*offset as usize) {
                 b'.' => {
+                    *offset += 1;
                     out.1 *= 10;
-                    out.1 += (unsafe { *data.add(*offset as usize + 1) } - b'0') as i32;
+                    out.1 += (*data.add(*offset as usize) - b'0') as i32;
                     out.1 = if sign { -out.1 } else { out.1 };
-                    *offset += 3;
+                    *offset += 1;
                     break;
                 }
                 c => {
@@ -230,7 +241,7 @@ pub mod challenge {
         len - 1
     }
 
-    fn handle_entry(temp: i32, lookup: &mut Lookup, name: &Key) {
+    fn handle_entry(lookup: &mut Lookup, name: &Key, temp: i32) {
         let entry = lookup
             .raw_entry_mut()
             .from_key(name)
@@ -249,51 +260,34 @@ mod tests {
     use test::Bencher;
     #[bench]
     fn bench_unique_small(b: &mut Bencher) {
-        b.iter(|| {
-            super::challenge::run(
-                "sample/measurements-20.txt".to_string().as_ref(),
-                NonZeroU8::MIN,
-            )
-            .expect("Unable to read input file");
-        });
+        b.iter(|| run_file("sample/measurements-20.txt"));
     }
     #[test]
     fn test_unique_small() {
-        use std::fs::read_to_string;
-        let expected_out =
-            read_to_string("sample/measurements-20.out").expect("Unable to read output file");
-        let out = super::challenge::run(
-            "sample/measurements-20.txt".to_string().as_ref(),
-            NonZeroU8::MIN,
-        )
-        .expect("Unable to read input file");
-        assert_equal(expected_out, out);
+        run_test("sample/measurements-20.txt", "sample/measurements-20.out");
     }
     #[bench]
     fn bench_unique_medium(b: &mut Bencher) {
-        b.iter(|| {
-            super::challenge::run(
-                "sample/measurements-10000-unique-keys.txt"
-                    .to_string()
-                    .as_ref(),
-                NonZeroU8::MIN,
-            )
-            .expect("Unable to read input file");
-        });
+        b.iter(|| run_file("sample/measurements-10000-unique-keys.txt"));
     }
     #[test]
     fn test_unique_medium() {
+        run_test(
+            "sample/measurements-10000-unique-keys.txt",
+            "sample/measurements-10000-unique-keys.out",
+        );
+    }
+
+    fn run_test(input_path: &str, output_path: &str) {
         use std::fs::read_to_string;
-        let expected_out = read_to_string("sample/measurements-10000-unique-keys.out")
-            .expect("Unable to read output file");
-        let out = super::challenge::run(
-            "sample/measurements-10000-unique-keys.txt"
-                .to_string()
-                .as_ref(),
-            NonZeroU8::MIN,
-        )
-        .expect("Unable to read input file");
+        let expected_out = read_to_string(output_path).expect("Unable to read output file");
+        let out = run_file(input_path);
         assert_equal(expected_out, out);
+    }
+
+    fn run_file(input_path: &str) -> String {
+        super::challenge::run(input_path.to_string().as_ref(), NonZeroU8::MIN)
+            .expect("Unable to read input file")
     }
     fn assert_equal(expected_out: String, out: String) {
         let diff_index = {

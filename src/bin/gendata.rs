@@ -479,7 +479,7 @@ static NAMES: [&str; 476] = [
 use std::{
     env::args,
     fs::OpenOptions,
-    io::{Seek, Write},
+    io::Write,
     thread::JoinHandle,
 };
 
@@ -564,9 +564,8 @@ fn main() -> Result<(), String> {
         );
     }
     println!("100%");
-    file.seek(std::io::SeekFrom::End(-1))
-        .map_err(|err| err.to_string())?;
     let len = file.metadata().unwrap().len();
+    // Remove the last \n
     file.set_len(len - 1).unwrap();
     Ok(())
 }
