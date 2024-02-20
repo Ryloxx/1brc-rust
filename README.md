@@ -25,7 +25,7 @@ cargo build --release
 ```
 Then locate your measurments data file and run the following command. 
 ```
-time ./target/release/onbrc-challenge /path/to/measurments_data 12
+time ./target/release/onebrc-challenge /path/to/measurments_data 12
 ```
 This will run and time the challenge on the provided file using 12 cpu cores.
 
